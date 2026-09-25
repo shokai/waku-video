@@ -4,6 +4,9 @@ CONFIG ?= release
 CODESIGN_IDENTITY ?= VideoClip Local Code Signing
 APP := build/$(APP_NAME).app
 SWIFT_SOURCES := Package.swift Sources Tests
+# pkill（SIGTERM）だとapplicationShouldTerminateを通らず、録画中の動画を失う。通常のquitを送って終了を待つ
+QUIT_APP := osascript -e 'if application id "$(BUNDLE_ID)" is running then tell application id "$(BUNDLE_ID)" to quit' \
+	&& while pgrep -x $(APP_NAME) >/dev/null; do sleep 0.1; done
 # Command Line Toolsだけの環境では、SwiftPMがTesting.frameworkとlib_TestingInteropの場所を渡さない
 CLT_DEVELOPER := $(wildcard $(shell xcode-select -p)/Library/Developer)
 TEST_FLAGS := $(if $(CLT_DEVELOPER),-Xswiftc -F -Xswiftc $(CLT_DEVELOPER)/Frameworks \
@@ -23,13 +26,11 @@ app: check-identity
 
 # binaryを直接実行すると、画面収録の許可がTerminalに付いてしまう。openで.appとして起動する
 run: app
-	-pkill -x $(APP_NAME)
-	while pgrep -x $(APP_NAME) >/dev/null; do sleep 0.1; done
+	$(QUIT_APP)
 	open "$(APP)"
 
 smoke: app
-	-pkill -x $(APP_NAME)
-	while pgrep -x $(APP_NAME) >/dev/null; do sleep 0.1; done
+	$(QUIT_APP)
 	rm -rf build/smoke
 	open -W "$(APP)" --args -SmokeRecordSeconds 3 -SaveDirectory "$(CURDIR)/build/smoke"
 	MIN_DURATION=2.5 scripts/probe.sh build/smoke/*.mp4

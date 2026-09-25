@@ -137,6 +137,11 @@ private final class FrameWriter: NSObject, SCStreamDelegate, SCStreamOutput, @un
     of type: SCStreamOutputType
   ) {
     guard type == .screen, !isFinished else { return }
+    // append成功後にwriterが非同期に失敗すると、readinessがfalseのままになるだけなので、statusを見て気付く
+    if assetWriter.status == .failed {
+      fail(assetWriter.error ?? RecorderError.writeFailed)
+      return
+    }
     if Self.isComplete(sampleBuffer) {
       pendingSample = sampleBuffer
     }
@@ -201,37 +206,41 @@ private final class FrameWriter: NSObject, SCStreamDelegate, SCStreamOutput, @un
       lastAppendedSample = nil
     }
     if let failure { throw failure }
-    waitUntilReady()
-    appendPendingSample()
-    if let failure { throw failure }
+    if assetWriter.status == .failed { throw assetWriter.error ?? RecorderError.writeFailed }
+    if pendingSample != nil, waitUntilReady() {
+      appendPendingSample()
+      if let failure { throw failure }
+    }
     guard let last = lastAppendedSample else {
       if assetWriter.status == .writing { assetWriter.cancelWriting() }
       throw RecorderError.noFrames
     }
 
-    // 最後のframeを停止時刻に複製して、止める直前の静止時間も動画に残す
+    // encoderが詰まったままで最新のframeを書けなければ、そのframeと末尾の複製は諦めて保存する
     let end = max(endTime, last.presentationTimeStamp)
-    if end > last.presentationTimeStamp {
+    if pendingSample != nil {
+      logger.error("dropped the latest frame because the encoder was not ready")
+    } else if end > last.presentationTimeStamp {
+      // 最後のframeを停止時刻に複製して、止める直前の静止時間も動画に残す
       let timing = CMSampleTimingInfo(
         duration: .invalid, presentationTimeStamp: end, decodeTimeStamp: .invalid)
-      // 複製できなくても、末尾の静止時間が欠けるだけで録画自体は保存できる
-      if let tail = try? CMSampleBuffer(copying: last, withNewTiming: [timing]) {
-        waitUntilReady()
+      if let tail = try? CMSampleBuffer(copying: last, withNewTiming: [timing]), waitUntilReady() {
         guard input.append(tail) else { throw assetWriter.error ?? RecorderError.writeFailed }
       } else {
-        logger.error("could not copy the last frame")
+        logger.error("could not append the last frame again")
       }
     }
     input.markAsFinished()
     assetWriter.endSession(atSourceTime: end)
   }
 
-  /// streamを止めた後にだけ呼ぶ。encoderが追い付くのを短時間だけ待つ
-  private func waitUntilReady() {
+  /// streamを止めた後にだけ呼ぶ。encoderが追い付くのを短時間だけ待ち、書けるようになったかを返す
+  private func waitUntilReady() -> Bool {
     let deadline = Date().addingTimeInterval(Self.readyTimeout)
     while !input.isReadyForMoreMediaData, Date() < deadline {
       Thread.sleep(forTimeInterval: 0.01)
     }
+    return input.isReadyForMoreMediaData
   }
 
   /// idle等のframeはimage bufferを持たないので、completeだけを書く

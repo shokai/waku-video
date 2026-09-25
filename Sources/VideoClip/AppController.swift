@@ -246,10 +246,11 @@ final class AppController: NSObject, NSApplicationDelegate {
     if let errorMessage {
       showError(errorMessage, error)
     }
-    if smokeRecordSeconds != nil {
-      NSApp.terminate(nil)
-    } else if isTerminating {
+    // .terminateLaterを返した後は、replyで終了を再開しないといけない
+    if isTerminating {
       NSApp.reply(toApplicationShouldTerminate: true)
+    } else if smokeRecordSeconds != nil {
+      NSApp.terminate(nil)
     }
   }
 

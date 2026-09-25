@@ -20,10 +20,17 @@ expect() {
 expect "codec_name=h264"
 expect "pix_fmt=yuv420p"
 expect "color_primaries=bt709"
+expect "color_transfer=bt709"
+expect "color_space=bt709"
+expect "color_range=tv"
 [ "$atoms" = "type:'moov'type:'mdat'" ] || { echo "NG: moovがmdatより前にない"; status=1; }
 
 duration="$(echo "$info" | sed -n 's/^duration=//p')"
-if ! awk -v d="$duration" -v min="${MIN_DURATION:-0}" 'BEGIN { exit !(d >= min) }'; then
+# awkは数値でない値を文字列として比較してしまうので、先に数値かを確かめる
+if ! echo "$duration" | grep -qE '^[0-9]+(\.[0-9]+)?$'; then
+  echo "NG: durationが数値ではない（$duration）"
+  status=1
+elif ! awk -v d="$duration" -v min="${MIN_DURATION:-0}" 'BEGIN { exit !(d + 0 >= min + 0) }'; then
   echo "NG: duration=$duration が${MIN_DURATION}秒より短い"
   status=1
 fi
