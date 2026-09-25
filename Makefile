@@ -32,7 +32,7 @@ smoke: app
 	while pgrep -x $(APP_NAME) >/dev/null; do sleep 0.1; done
 	rm -rf build/smoke
 	open -W "$(APP)" --args -SmokeRecordSeconds 3 -SaveDirectory "$(CURDIR)/build/smoke"
-	scripts/probe.sh build/smoke/*.mp4
+	MIN_DURATION=2.5 scripts/probe.sh build/smoke/*.mp4
 
 test:
 	swift test --disable-xctest $(TEST_FLAGS)

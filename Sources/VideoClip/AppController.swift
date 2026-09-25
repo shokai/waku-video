@@ -11,7 +11,8 @@ private final class RecordingSession {
   let startedAt: Date
   let indicator: RecordingIndicator
   var recorder: ScreenRecorder?
-  var isStopping = false
+  /// 録画の開始処理を待っている間にも停止を受け付けるので、recorderの有無とは別に持つ
+  var isStopRequested = false
 
   init(id: UUID, tempURL: URL, startedAt: Date, indicator: RecordingIndicator) {
     self.id = id
@@ -36,16 +37,25 @@ final class AppController: NSObject, NSApplicationDelegate {
   private var statusItem: NSStatusItem?
   private let menu = NSMenu()
   /// 起動引数`-SmokeRecordSeconds 3`で、主画面中央を指定秒数だけ録画して終了する。録画処理を手で操作せずに確かめられるようにするため
-  private var isSmokeTest = false
+  private var smokeRecordSeconds: Double?
+  private var isTerminating = false
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     setUpStatusItem()
 
     let smokeSeconds = UserDefaults.standard.double(forKey: "SmokeRecordSeconds")
     if smokeSeconds > 0 {
-      isSmokeTest = true
-      runSmokeTest(seconds: smokeSeconds)
+      smokeRecordSeconds = smokeSeconds
+      runSmokeTest()
     }
+  }
+
+  /// 録画中や書き出し中に終了すると録画を失うので、保存し終わるまで終了を待たせる
+  func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+    guard case .recording(let session) = state else { return .terminateNow }
+    isTerminating = true
+    stopRecording(sessionID: session.id)
+    return .terminateLater
   }
 
   // MARK: - Status item
@@ -67,7 +77,7 @@ final class AppController: NSObject, NSApplicationDelegate {
 
   private func updateStatusItem() {
     guard let statusItem, let button = statusItem.button else { return }
-    if case .recording(let session) = state, !session.isStopping {
+    if case .recording(let session) = state, !session.isStopRequested {
       button.image = NSImage(
         systemSymbolName: "stop.circle.fill", accessibilityDescription: "録画を停止")
       // menuを外すと、クリックでbuttonのactionが呼ばれる
@@ -153,14 +163,21 @@ final class AppController: NSObject, NSApplicationDelegate {
       outputURL: tempURL)
     Task {
       do {
-        session.recorder = try await ScreenRecorder.start(request) { [weak self] _ in
+        let recorder = try await ScreenRecorder.start(request) { [weak self] _ in
           Task { @MainActor in self?.stopRecording(sessionID: sessionID) }
+        }
+        session.recorder = recorder
+        if session.isStopRequested {
+          finishRecording(session, recorder: recorder)
+        } else if let seconds = smokeRecordSeconds {
+          try? await Task.sleep(for: .seconds(seconds))
+          stopRecording(sessionID: sessionID)
         }
       } catch {
         guard currentSession(id: sessionID) != nil else { return }
-        state = .idle
         indicator.close()
-        showError("録画を開始できませんでした", error)
+        try? FileManager.default.removeItem(at: tempURL)
+        endSession(errorMessage: "録画を開始できませんでした", error: error)
       }
     }
   }
@@ -175,37 +192,32 @@ final class AppController: NSObject, NSApplicationDelegate {
     stopRecording(sessionID: session.id)
   }
 
-  /// ユーザーの停止操作と、システム側でstreamが止まった時の両方から呼ばれる
+  /// ユーザーの停止操作、システム側でstreamが止まった時、書き出しに失敗した時、アプリの終了時から呼ばれる
   private func stopRecording(sessionID: UUID) {
-    guard let session = currentSession(id: sessionID), !session.isStopping,
-      let recorder = session.recorder
-    else { return }
-    session.isStopping = true
+    guard let session = currentSession(id: sessionID), !session.isStopRequested else { return }
+    session.isStopRequested = true
     session.indicator.close()
     updateStatusItem()
+    // recorderがまだ無ければ、開始処理が終わった所でfinishRecordingする
+    if let recorder = session.recorder {
+      finishRecording(session, recorder: recorder)
+    }
+  }
+
+  private func finishRecording(_ session: RecordingSession, recorder: ScreenRecorder) {
     Task {
       do {
         try await recorder.stop()
-        finalize(session)
+        save(session)
       } catch {
-        finalize(session, error: error)
+        try? FileManager.default.removeItem(at: session.tempURL)
+        endSession(errorMessage: "録画を保存できませんでした", error: error)
       }
     }
   }
 
-  private func finalize(_ session: RecordingSession, error: (any Error)? = nil) {
-    guard currentSession(id: session.id) != nil else { return }
-    state = .idle
-    defer {
-      if isSmokeTest { NSApp.terminate(nil) }
-    }
-
+  private func save(_ session: RecordingSession) {
     let fileManager = FileManager.default
-    if let error {
-      try? fileManager.removeItem(at: session.tempURL)
-      showError("録画を保存できませんでした", error)
-      return
-    }
 
     // `-SaveDirectory <path>`（起動引数かdefaults）で保存先を変えられる。make smokeがデスクトップを汚さないために使う
     let directory =
@@ -218,16 +230,32 @@ final class AppController: NSObject, NSApplicationDelegate {
       try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
       try fileManager.moveItem(at: session.tempURL, to: destination)
       logger.info("saved \(destination.path, privacy: .public)")
-      if !isSmokeTest { NSWorkspace.shared.activateFileViewerSelecting([destination]) }
+      if smokeRecordSeconds == nil {
+        NSWorkspace.shared.activateFileViewerSelecting([destination])
+      }
+      endSession()
     } catch {
       NSWorkspace.shared.activateFileViewerSelecting([session.tempURL])
-      showError("\(directory.lastPathComponent)に保存できませんでした", error)
+      endSession(errorMessage: "\(directory.lastPathComponent)に保存できませんでした", error: error)
+    }
+  }
+
+  /// 録画の成否に関わらず、最後に1回だけ呼ぶ
+  private func endSession(errorMessage: String? = nil, error: (any Error)? = nil) {
+    state = .idle
+    if let errorMessage {
+      showError(errorMessage, error)
+    }
+    if smokeRecordSeconds != nil {
+      NSApp.terminate(nil)
+    } else if isTerminating {
+      NSApp.reply(toApplicationShouldTerminate: true)
     }
   }
 
   private func showError(_ message: String, _ error: (any Error)?) {
     logger.error("\(message): \(error?.localizedDescription ?? "", privacy: .public)")
-    if isSmokeTest { return }
+    if smokeRecordSeconds != nil { return }
     NSApp.activate()
     let alert = NSAlert()
     alert.alertStyle = .warning
@@ -238,7 +266,7 @@ final class AppController: NSObject, NSApplicationDelegate {
 
   // MARK: - Smoke test
 
-  private func runSmokeTest(seconds: Double) {
+  private func runSmokeTest() {
     guard CGPreflightScreenCaptureAccess(), let screen = NSScreen.screens.first,
       let displayID = screen.displayID
     else {
@@ -254,9 +282,5 @@ final class AppController: NSObject, NSApplicationDelegate {
       Selection(
         displayID: displayID, screenFrame: screen.frame, scale: screen.backingScaleFactor,
         globalRect: rect))
-    Task {
-      try? await Task.sleep(for: .seconds(seconds))
-      stopRecording()
-    }
   }
 }

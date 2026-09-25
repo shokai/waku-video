@@ -14,11 +14,13 @@ struct RecordingRequest: Sendable {
 enum RecorderError: LocalizedError {
   case displayNotFound
   case noFrames
+  case writeFailed
 
   var errorDescription: String? {
     switch self {
     case .displayNotFound: "録画するディスプレイが見つかりません"
     case .noFrames: "画面を1フレームも取得できませんでした"
+    case .writeFailed: "動画の書き出しに失敗しました"
     }
   }
 }
@@ -26,7 +28,7 @@ enum RecorderError: LocalizedError {
 private let logger = Logger(subsystem: "org.shokai.VideoClip", category: "ScreenRecorder")
 
 /// SCStreamは非Sendableなので、MainActorから直接触らずにこのclassの中だけで扱う。
-/// 生成後に状態を変えないので@unchecked Sendableにしている
+/// startで生成した後、AppControllerがstop()を1回だけ呼ぶ前提で@unchecked Sendableにしている
 final class ScreenRecorder: @unchecked Sendable {
   private let stream: SCStream
   private let writer: FrameWriter
@@ -41,10 +43,10 @@ final class ScreenRecorder: @unchecked Sendable {
     _ = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
   }
 
-  /// onStreamStoppedは、システムの「共有を停止」やディスプレイの切断でstreamが止まった時に呼ばれる
+  /// onInterruptedは、システムの「共有を停止」やディスプレイの切断でstreamが止まった時と、書き出しに失敗した時に呼ばれる
   static func start(
     _ request: RecordingRequest,
-    onStreamStopped: @escaping @Sendable (any Error) -> Void
+    onInterrupted: @escaping @Sendable (any Error) -> Void
   ) async throws -> ScreenRecorder {
     let content = try await SCShareableContent.excludingDesktopWindows(
       false, onScreenWindowsOnly: true)
@@ -65,7 +67,7 @@ final class ScreenRecorder: @unchecked Sendable {
     config.preservesAspectRatio = false
 
     let writer = try FrameWriter(
-      url: request.outputURL, size: request.outputSize, onStreamStopped: onStreamStopped)
+      url: request.outputURL, size: request.outputSize, onInterrupted: onInterrupted)
     let stream = SCStream(filter: filter, configuration: config, delegate: writer)
     try stream.addStreamOutput(writer, type: .screen, sampleHandlerQueue: writer.queue)
 
@@ -78,7 +80,8 @@ final class ScreenRecorder: @unchecked Sendable {
 
   /// 書き出しが終わるまで待つ。streamが既に止まっていても呼んでよい
   func stop() async throws {
-    let endTime = CMClockGetTime(CMClockGetHostTimeClock())
+    // sample bufferのPTSと同じ時間軸で停止時刻を取る
+    let endTime = CMClockGetTime(stream.synchronizationClock ?? CMClockGetHostTimeClock())
     do {
       try await stream.stopCapture()
     } catch {
@@ -88,17 +91,21 @@ final class ScreenRecorder: @unchecked Sendable {
   }
 }
 
-/// AVAssetWriterの状態は全てqueueの上でだけ触るので、@unchecked Sendableにしている
+/// sample bufferのappendまでの可変状態は、全てqueueの上でだけ触るので@unchecked Sendableにしている
 private final class FrameWriter: NSObject, SCStreamDelegate, SCStreamOutput, @unchecked Sendable {
+  private static let readyTimeout: TimeInterval = 0.5
+
   let queue = DispatchQueue(label: "org.shokai.VideoClip.writer")
   private let assetWriter: AVAssetWriter
   private let input: AVAssetWriterInput
-  private let onStreamStopped: @Sendable (any Error) -> Void
-  private var isStarted = false
+  private let onInterrupted: @Sendable (any Error) -> Void
   private var isFinished = false
-  private var lastSample: CMSampleBuffer?
+  private var failure: (any Error)?
+  /// ScreenCaptureKitは画面が変化した時しかcompleteなframeを出さないので、encoderが混んでいて書けなかった最新のframeを次の機会まで持っておく
+  private var pendingSample: CMSampleBuffer?
+  private var lastAppendedSample: CMSampleBuffer?
 
-  init(url: URL, size: PixelSize, onStreamStopped: @escaping @Sendable (any Error) -> Void) throws {
+  init(url: URL, size: PixelSize, onInterrupted: @escaping @Sendable (any Error) -> Void) throws {
     assetWriter = try AVAssetWriter(outputURL: url, fileType: .mp4)
     // moovをファイル先頭に置き、ダウンロードし終わる前に再生を始められるようにする
     assetWriter.shouldOptimizeForNetworkUse = true
@@ -122,75 +129,112 @@ private final class FrameWriter: NSObject, SCStreamDelegate, SCStreamOutput, @un
       ])
     input.expectsMediaDataInRealTime = true
     assetWriter.add(input)
-    self.onStreamStopped = onStreamStopped
+    self.onInterrupted = onInterrupted
   }
 
   func stream(
     _ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
     of type: SCStreamOutputType
   ) {
-    guard type == .screen, !isFinished, Self.isComplete(sampleBuffer) else { return }
-    if !isStarted {
-      guard assetWriter.startWriting() else {
-        logger.error(
-          "startWriting failed: \(String(describing: self.assetWriter.error), privacy: .public)")
-        isFinished = true
-        return
-      }
-      assetWriter.startSession(atSourceTime: sampleBuffer.presentationTimeStamp)
-      isStarted = true
+    guard type == .screen, !isFinished else { return }
+    if Self.isComplete(sampleBuffer) {
+      pendingSample = sampleBuffer
     }
-    guard input.isReadyForMoreMediaData else { return }
-    if input.append(sampleBuffer) {
-      lastSample = sampleBuffer
-    } else {
-      logger.error("append failed: \(String(describing: self.assetWriter.error), privacy: .public)")
-    }
+    // 画面が静止している間もidleなframeが届くので、書けなかったframeはその時に書く
+    appendPendingSample()
   }
 
   func stream(_ stream: SCStream, didStopWithError error: any Error) {
     logger.error("stream stopped: \(String(describing: error), privacy: .public)")
-    onStreamStopped(error)
+    onInterrupted(error)
   }
 
   func finish(at endTime: CMTime) async throws {
-    let hasFrames = await withCheckedContinuation { continuation in
+    try await withCheckedThrowingContinuation {
+      (continuation: CheckedContinuation<Void, any Error>) in
       queue.async {
-        self.isFinished = true
-        guard self.isStarted, let last = self.lastSample else {
-          continuation.resume(returning: false)
-          return
+        do {
+          try self.closeInput(at: endTime)
+          continuation.resume()
+        } catch {
+          continuation.resume(throwing: error)
         }
-        let end = max(endTime, last.presentationTimeStamp)
-        // ScreenCaptureKitは画面が変化した時しかframeを出さないので、そのままだと止める直前の静止時間が動画から欠ける。
-        // 最後のframeを停止時刻に複製して、動画の長さを録画した時間に合わせる
-        if end > last.presentationTimeStamp, self.input.isReadyForMoreMediaData,
-          let tail = try? CMSampleBuffer(
-            copying: last,
-            withNewTiming: [
-              CMSampleTimingInfo(
-                duration: .invalid, presentationTimeStamp: end, decodeTimeStamp: .invalid)
-            ])
-        {
-          self.input.append(tail)
-        }
-        self.input.markAsFinished()
-        self.assetWriter.endSession(atSourceTime: end)
-        self.lastSample = nil
-        continuation.resume(returning: true)
       }
     }
-    guard hasFrames else {
-      if isStarted { assetWriter.cancelWriting() }
-      throw RecorderError.noFrames
-    }
     await assetWriter.finishWriting()
-    if assetWriter.status == .failed {
-      throw assetWriter.error ?? RecorderError.noFrames
+    guard assetWriter.status == .completed else {
+      throw assetWriter.error ?? RecorderError.writeFailed
     }
   }
 
-  /// 画面に変化が無い間はimage bufferを持たないidle等のframeも届くので、completeだけを書く
+  private func appendPendingSample() {
+    guard let sample = pendingSample else { return }
+    // isReadyForMoreMediaDataはstartWritingするまでfalseのままなので、先に書き込みを始める
+    if assetWriter.status == .unknown {
+      guard assetWriter.startWriting() else {
+        fail(assetWriter.error ?? RecorderError.writeFailed)
+        return
+      }
+      assetWriter.startSession(atSourceTime: sample.presentationTimeStamp)
+    }
+    guard input.isReadyForMoreMediaData else { return }
+    guard input.append(sample) else {
+      fail(assetWriter.error ?? RecorderError.writeFailed)
+      return
+    }
+    lastAppendedSample = sample
+    pendingSample = nil
+  }
+
+  private func fail(_ error: any Error) {
+    guard failure == nil else { return }
+    logger.error("writer failed: \(String(describing: error), privacy: .public)")
+    failure = error
+    isFinished = true
+    onInterrupted(error)
+  }
+
+  private func closeInput(at endTime: CMTime) throws {
+    defer {
+      isFinished = true
+      pendingSample = nil
+      lastAppendedSample = nil
+    }
+    if let failure { throw failure }
+    waitUntilReady()
+    appendPendingSample()
+    if let failure { throw failure }
+    guard let last = lastAppendedSample else {
+      if assetWriter.status == .writing { assetWriter.cancelWriting() }
+      throw RecorderError.noFrames
+    }
+
+    // 最後のframeを停止時刻に複製して、止める直前の静止時間も動画に残す
+    let end = max(endTime, last.presentationTimeStamp)
+    if end > last.presentationTimeStamp {
+      let timing = CMSampleTimingInfo(
+        duration: .invalid, presentationTimeStamp: end, decodeTimeStamp: .invalid)
+      // 複製できなくても、末尾の静止時間が欠けるだけで録画自体は保存できる
+      if let tail = try? CMSampleBuffer(copying: last, withNewTiming: [timing]) {
+        waitUntilReady()
+        guard input.append(tail) else { throw assetWriter.error ?? RecorderError.writeFailed }
+      } else {
+        logger.error("could not copy the last frame")
+      }
+    }
+    input.markAsFinished()
+    assetWriter.endSession(atSourceTime: end)
+  }
+
+  /// streamを止めた後にだけ呼ぶ。encoderが追い付くのを短時間だけ待つ
+  private func waitUntilReady() {
+    let deadline = Date().addingTimeInterval(Self.readyTimeout)
+    while !input.isReadyForMoreMediaData, Date() < deadline {
+      Thread.sleep(forTimeInterval: 0.01)
+    }
+  }
+
+  /// idle等のframeはimage bufferを持たないので、completeだけを書く
   private static func isComplete(_ sampleBuffer: CMSampleBuffer) -> Bool {
     guard
       let attachments = CMSampleBufferGetSampleAttachmentsArray(
