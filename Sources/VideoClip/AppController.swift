@@ -8,18 +8,27 @@ private let logger = Logger(subsystem: "org.shokai.VideoClip", category: "AppCon
 private final class RecordingSession {
   let id: UUID
   let tempURL: URL
+  /// 録画中にdefaultsを書き換えられても、録画を始めた時点の保存先に保存する
+  let saveDirectory: URL
   let startedAt: Date
   let indicator: RecordingIndicator
   var recorder: ScreenRecorder?
   /// 録画の開始処理を待っている間にも停止を受け付けるので、recorderの有無とは別に持つ
   var isStopRequested = false
 
-  init(id: UUID, tempURL: URL, startedAt: Date, indicator: RecordingIndicator) {
+  init(
+    id: UUID, tempURL: URL, saveDirectory: URL, startedAt: Date, indicator: RecordingIndicator
+  ) {
     self.id = id
     self.tempURL = tempURL
+    self.saveDirectory = saveDirectory
     self.startedAt = startedAt
     self.indicator = indicator
   }
+}
+
+private struct DescribedError: LocalizedError {
+  let errorDescription: String?
 }
 
 @MainActor
@@ -88,7 +97,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMe
 
   func menuNeedsUpdate(_ menu: NSMenu) {
     let directory = saveDirectory
-    // displayName(atPath:)もファイルシステムに触るので使わない
+    // displayName(atPath:)はファイルシステムに触るので使わない
     saveDirectoryItem.title = "保存先: \(directory.lastPathComponent)"
     saveDirectoryItem.toolTip = (directory.path as NSString).abbreviatingWithTildeInPath
   }
@@ -131,10 +140,9 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMe
 
   /// 起動引数`-SaveDirectory <path>`はメニューで選んだ値より優先される。make smokeがユーザーの保存先を汚さないために使う
   private var saveDirectory: URL {
-    // url(forKey:)はpathをstatするので、応答しないNASが保存先だとメニューを開く度に固まる
-    guard let path = UserDefaults.standard.string(forKey: Self.saveDirectoryKey), !path.isEmpty
-    else { return FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask)[0] }
-    return URL(filePath: (path as NSString).expandingTildeInPath, directoryHint: .isDirectory)
+    SaveDirectory.url(
+      fromPath: UserDefaults.standard.string(forKey: Self.saveDirectoryKey),
+      fallback: FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask)[0])
   }
 
   @objc private func chooseSaveDirectoryClicked() {
@@ -151,7 +159,6 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMe
     let response = panel.runModal()
     state = .idle
     guard response == .OK, let url = panel.url else { return }
-    // set(_: URL, forKey:)はNSDataにarchiveするので、起動引数と同じpath文字列で持つ
     UserDefaults.standard.set(url.path, forKey: Self.saveDirectoryKey)
   }
 
@@ -211,7 +218,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMe
       .appendingPathComponent("VideoClip-\(UUID().uuidString)")
       .appendingPathExtension("mp4")
     let session = RecordingSession(
-      id: sessionID, tempURL: tempURL, startedAt: Date(), indicator: indicator)
+      id: sessionID, tempURL: tempURL, saveDirectory: saveDirectory, startedAt: Date(),
+      indicator: indicator)
     state = .recording(session)
 
     let request = RecordingRequest(
@@ -272,7 +280,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMe
   }
 
   private func save(_ session: RecordingSession) async {
-    let directory = saveDirectory
+    let directory = session.saveDirectory
     do {
       let destination = try await Self.moveRecording(
         session.tempURL, into: directory,
@@ -294,12 +302,17 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMe
     _ source: URL, into directory: URL, baseName: String
   ) async throws -> URL {
     let fileManager = FileManager.default
-    try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-    let destination = OutputFileName.uniqueURL(in: directory, baseName: baseName) {
-      fileManager.fileExists(atPath: $0.path)
+    do {
+      try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+      let destination = OutputFileName.uniqueURL(in: directory, baseName: baseName) {
+        fileManager.fileExists(atPath: $0.path)
+      }
+      try fileManager.moveItem(at: source, to: destination)
+      return destination
+    } catch {
+      // ファイル操作のエラーはlocalizedDescriptionを作る時にエラーが持つpathの属性を取得するので、MainActorに返す前に文字列にする
+      throw DescribedError(errorDescription: error.localizedDescription)
     }
-    try fileManager.moveItem(at: source, to: destination)
-    return destination
   }
 
   /// 録画の成否に関わらず、最後に1回だけ呼ぶ
