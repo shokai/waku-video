@@ -16,12 +16,14 @@ final class RecordingIndicator {
     let borderFrame = outline.intersection(screenFrame)
     borderPanel = Self.makePanel(frame: borderFrame)
     borderPanel.ignoresMouseEvents = true
+    // window serverがwindowの位置を丸めても線が範囲に入らないよう、要求した位置ではなく実際のframeから描く位置を決める
+    let actualFrame = borderPanel.frame
     borderPanel.contentView = BorderView(
-      frame: CGRect(origin: .zero, size: borderFrame.size),
-      region: globalRect.offsetBy(dx: -borderFrame.minX, dy: -borderFrame.minY),
+      frame: CGRect(origin: .zero, size: actualFrame.size),
+      region: globalRect.offsetBy(dx: -actualFrame.minX, dy: -actualFrame.minY),
       lineWidth: Self.lineWidth)
 
-    // 範囲が画面全体を覆っていて置き場所が無い時は、メニューバーのアイコンから止める
+    // 範囲の外に置く余白が無ければ停止ボタンは出さない。メニューバーのアイコンか、macOSの「共有を停止」で止める
     if let buttonFrame = ControlPlacement.frame(
       size: Self.buttonSize, outside: outline, in: screenFrame, gap: Self.buttonGap)
     {

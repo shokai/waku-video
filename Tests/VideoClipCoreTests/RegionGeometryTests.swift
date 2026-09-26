@@ -42,7 +42,7 @@ struct RegionGeometryTests {
     #expect(rect == CGRect(x: 0, y: 100, width: 500, height: 500))
   }
 
-  @Test func pixelAlignedShrinksToEvenPixels() {
+  @Test func pixelAlignedRoundsToEvenPixels() {
     let rect = RegionGeometry.pixelAligned(
       CGRect(x: 10.25, y: 20.5, width: 100.5, height: 50.75), scale: 2)
     #expect(rect == CGRect(x: 10.5, y: 20.5, width: 100, height: 51))

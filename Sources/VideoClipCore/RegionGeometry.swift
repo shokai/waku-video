@@ -34,7 +34,7 @@ public enum RegionGeometry {
     return CGRect(x: min(a.x, b.x), y: min(a.y, b.y), width: abs(a.x - b.x), height: abs(a.y - b.y))
   }
 
-  /// 物理pixelの格子に揃え、pixel単位の幅と高さを偶数に縮める。H.264の4:2:0は奇数の幅・高さを扱えない
+  /// 端点をpixel格子に丸め、pixel単位の幅と高さを偶数にする。H.264の4:2:0は奇数の幅・高さを扱えない
   public static func pixelAligned(_ rect: CGRect, scale: CGFloat) -> CGRect {
     let minX = (rect.minX * scale).rounded()
     let minY = (rect.minY * scale).rounded()

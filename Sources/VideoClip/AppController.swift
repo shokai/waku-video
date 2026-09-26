@@ -23,7 +23,7 @@ private final class RecordingSession {
 }
 
 @MainActor
-final class AppController: NSObject, NSApplicationDelegate {
+final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation {
   private enum State {
     case idle
     case preparing
@@ -93,6 +93,13 @@ final class AppController: NSObject, NSApplicationDelegate {
 
   @objc private func startClicked() {
     if case .idle = state { beginSelection() }
+  }
+
+  // 停止後もmp4を書き終えるまではrecording状態が続くので、その間は開始を押せないようにする
+  func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+    guard menuItem.action == #selector(startClicked) else { return true }
+    if case .idle = state { return true }
+    return false
   }
 
   @objc private func stopClicked() {
@@ -192,7 +199,6 @@ final class AppController: NSObject, NSApplicationDelegate {
     stopRecording(sessionID: session.id)
   }
 
-  /// ユーザーの停止操作、システム側でstreamが止まった時、書き出しに失敗した時、アプリの終了時から呼ばれる
   private func stopRecording(sessionID: UUID) {
     guard let session = currentSession(id: sessionID), !session.isStopRequested else { return }
     session.isStopRequested = true

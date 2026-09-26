@@ -1,7 +1,6 @@
 import CoreGraphics
 
 public enum ControlPlacement {
-  /// 録画範囲に重ならない位置を、範囲の下・上・右・左の順に探す。画面内に置けなければnil。
   /// 座標はCocoaのグローバル座標（左下原点）
   public static func frame(size: CGSize, outside region: CGRect, in screen: CGRect, gap: CGFloat)
     -> CGRect?

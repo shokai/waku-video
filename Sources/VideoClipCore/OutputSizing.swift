@@ -11,8 +11,9 @@ public struct PixelSize: Equatable, Sendable {
 }
 
 public enum OutputSizing {
-  // H.264 Level 5.1/5.2の上限（MaxFS = 36,864 macroblock = 4096×2304）。これを超えると再生できない環境がある
+  // VideoToolboxのH.264エンコーダは、どちらかの辺が4096pxを超えると何も書き出さない
   public static let maxLongEdge = 4096
+  // H.264 Level 5.2のMaxFS（4096×2304相当）。これを超えるとLevel 6になり、再生できない環境がある
   public static let maxMacroblocks = 36_864
 
   public static func outputSize(pointSize: CGSize, scale: CGFloat) -> PixelSize {
@@ -38,7 +39,7 @@ public enum OutputSizing {
   }
 
   private static func evenFloor(_ value: Double) -> Int {
-    // 5120×0.8が4095.999…になる等の浮動小数点誤差で1px欠けないよう、切り捨て前に僅かに足す
+    // 5120×0.8が4095.999…になる等の浮動小数点誤差で、偶数化の後に2px欠けないよう、切り捨て前に僅かに足す
     let floored = Int((value + 1e-6).rounded(.down))
     return max(2, floored - floored % 2)
   }
