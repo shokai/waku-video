@@ -53,6 +53,10 @@ probe:
 reset-tcc:
 	-tccutil reset ScreenCapture $(BUNDLE_ID)
 	-tccutil reset SystemPolicyDesktopFolder $(BUNDLE_ID)
+	-tccutil reset SystemPolicyDocumentsFolder $(BUNDLE_ID)
+	-tccutil reset SystemPolicyDownloadsFolder $(BUNDLE_ID)
+	-tccutil reset SystemPolicyRemovableVolumes $(BUNDLE_ID)
+	-tccutil reset SystemPolicyNetworkVolumes $(BUNDLE_ID)
 
 # 自己署名証明書は信頼設定をしない限り`-v`（有効なidentityのみ）に出てこないので、-v無しで探す
 check-identity:

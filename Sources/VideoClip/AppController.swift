@@ -8,27 +8,39 @@ private let logger = Logger(subsystem: "org.shokai.VideoClip", category: "AppCon
 private final class RecordingSession {
   let id: UUID
   let tempURL: URL
+  /// 録画中にdefaultsを書き換えられても、録画を始めた時点の保存先に保存する
+  let saveDirectory: URL
   let startedAt: Date
   let indicator: RecordingIndicator
   var recorder: ScreenRecorder?
   /// 録画の開始処理を待っている間にも停止を受け付けるので、recorderの有無とは別に持つ
   var isStopRequested = false
 
-  init(id: UUID, tempURL: URL, startedAt: Date, indicator: RecordingIndicator) {
+  init(
+    id: UUID, tempURL: URL, saveDirectory: URL, startedAt: Date, indicator: RecordingIndicator
+  ) {
     self.id = id
     self.tempURL = tempURL
+    self.saveDirectory = saveDirectory
     self.startedAt = startedAt
     self.indicator = indicator
   }
 }
 
+private struct DescribedError: LocalizedError {
+  let errorDescription: String?
+}
+
 @MainActor
-final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation {
+final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemValidation {
+  private static let saveDirectoryKey = "SaveDirectory"
+
   private enum State {
     case idle
     case preparing
     case selecting(SelectionOverlay)
     case recording(RecordingSession)
+    case choosingSaveDirectory
   }
 
   private var state: State = .idle {
@@ -36,6 +48,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
   }
   private var statusItem: NSStatusItem?
   private let menu = NSMenu()
+  private let saveDirectoryItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
   /// 起動引数`-SmokeRecordSeconds 3`で、主画面中央を指定秒数だけ録画して終了する。録画処理を手で操作せずに確かめられるようにするため
   private var smokeRecordSeconds: Double?
   private var isTerminating = false
@@ -66,13 +79,27 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     startItem.target = self
     menu.addItem(startItem)
     menu.addItem(.separator())
+    menu.addItem(saveDirectoryItem)
+    let chooseSaveDirectoryItem = NSMenuItem(
+      title: "保存先を変更…", action: #selector(chooseSaveDirectoryClicked), keyEquivalent: "")
+    chooseSaveDirectoryItem.target = self
+    menu.addItem(chooseSaveDirectoryItem)
+    menu.addItem(.separator())
     menu.addItem(
       NSMenuItem(
         title: "VideoClipを終了", action: #selector(NSApplication.terminate(_:)),
         keyEquivalent: "q"))
+    menu.delegate = self
 
     statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     updateStatusItem()
+  }
+
+  func menuNeedsUpdate(_ menu: NSMenu) {
+    let directory = saveDirectory
+    // displayName(atPath:)はファイルシステムに触るので使わない
+    saveDirectoryItem.title = "保存先: \(directory.lastPathComponent)"
+    saveDirectoryItem.toolTip = (directory.path as NSString).abbreviatingWithTildeInPath
   }
 
   private func updateStatusItem() {
@@ -95,15 +122,44 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     if case .idle = state { beginSelection() }
   }
 
-  // 停止後もmp4を書き終えるまではrecording状態が続くので、その間は開始を押せないようにする
+  // 停止後もmp4を保存し終えるまではrecording状態が続くので、その間は開始も保存先の変更も押せないようにする
   func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-    guard menuItem.action == #selector(startClicked) else { return true }
+    guard
+      menuItem.action == #selector(startClicked)
+        || menuItem.action == #selector(chooseSaveDirectoryClicked)
+    else { return true }
     if case .idle = state { return true }
     return false
   }
 
   @objc private func stopClicked() {
     stopRecording()
+  }
+
+  // MARK: - Save directory
+
+  /// 起動引数`-SaveDirectory <path>`はメニューで選んだ値より優先される。make smokeがユーザーの保存先を汚さないために使う
+  private var saveDirectory: URL {
+    SaveDirectory.url(
+      fromPath: UserDefaults.standard.string(forKey: Self.saveDirectoryKey),
+      fallback: FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask)[0])
+  }
+
+  @objc private func chooseSaveDirectoryClicked() {
+    guard case .idle = state else { return }
+    let panel = NSOpenPanel()
+    panel.message = "録画したmp4の保存先を選んでください"
+    panel.prompt = "選択"
+    panel.canChooseFiles = false
+    panel.canChooseDirectories = true
+    panel.canCreateDirectories = true
+    panel.directoryURL = saveDirectory
+    state = .choosingSaveDirectory
+    NSApp.activate()
+    let response = panel.runModal()
+    state = .idle
+    guard response == .OK, let url = panel.url else { return }
+    UserDefaults.standard.set(url.path, forKey: Self.saveDirectoryKey)
   }
 
   // MARK: - Selection
@@ -162,7 +218,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
       .appendingPathComponent("VideoClip-\(UUID().uuidString)")
       .appendingPathExtension("mp4")
     let session = RecordingSession(
-      id: sessionID, tempURL: tempURL, startedAt: Date(), indicator: indicator)
+      id: sessionID, tempURL: tempURL, saveDirectory: saveDirectory, startedAt: Date(),
+      indicator: indicator)
     state = .recording(session)
 
     let request = RecordingRequest(
@@ -214,7 +271,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     Task {
       do {
         try await recorder.stop()
-        save(session)
+        await save(session)
       } catch {
         try? FileManager.default.removeItem(at: session.tempURL)
         endSession(errorMessage: "録画を保存できませんでした", error: error)
@@ -222,19 +279,12 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     }
   }
 
-  private func save(_ session: RecordingSession) {
-    let fileManager = FileManager.default
-
-    // `-SaveDirectory <path>`（起動引数かdefaults）で保存先を変えられる。make smokeがデスクトップを汚さないために使う
-    let directory =
-      UserDefaults.standard.url(forKey: "SaveDirectory")
-      ?? fileManager.urls(for: .desktopDirectory, in: .userDomainMask)[0]
-    let destination = OutputFileName.uniqueURL(
-      in: directory, baseName: OutputFileName.baseName(for: session.startedAt)
-    ) { fileManager.fileExists(atPath: $0.path) }
+  private func save(_ session: RecordingSession) async {
+    let directory = session.saveDirectory
     do {
-      try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-      try fileManager.moveItem(at: session.tempURL, to: destination)
+      let destination = try await Self.moveRecording(
+        session.tempURL, into: directory,
+        baseName: OutputFileName.baseName(for: session.startedAt))
       logger.info("saved \(destination.path, privacy: .public)")
       if smokeRecordSeconds == nil {
         NSWorkspace.shared.activateFileViewerSelecting([destination])
@@ -243,6 +293,25 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     } catch {
       NSWorkspace.shared.activateFileViewerSelecting([session.tempURL])
       endSession(errorMessage: "\(directory.lastPathComponent)に保存できませんでした", error: error)
+    }
+  }
+
+  /// 保存先が別ボリュームだとmoveItemはファイル全体のコピーになるので、MainActorを止めないよう外で行う
+  @concurrent
+  private nonisolated static func moveRecording(
+    _ source: URL, into directory: URL, baseName: String
+  ) async throws -> URL {
+    let fileManager = FileManager.default
+    do {
+      try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+      let destination = OutputFileName.uniqueURL(in: directory, baseName: baseName) {
+        fileManager.fileExists(atPath: $0.path)
+      }
+      try fileManager.moveItem(at: source, to: destination)
+      return destination
+    } catch {
+      // ファイル操作のエラーはlocalizedDescriptionを作る時にエラーが持つpathの属性を取得するので、MainActorに返す前に文字列にする
+      throw DescribedError(errorDescription: error.localizedDescription)
     }
   }
 
