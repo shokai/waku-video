@@ -1,5 +1,5 @@
 import AppKit
-import VideoClipCore
+import WakuVideoCore
 
 /// 録画範囲の枠と停止ボタン。どちらも範囲の外側に置くので、動画には映らない
 @MainActor

@@ -1,8 +1,8 @@
 import AppKit
 import OSLog
-import VideoClipCore
+import WakuVideoCore
 
-private let logger = Logger(subsystem: "org.shokai.VideoClip", category: "AppController")
+private let logger = Logger(subsystem: "org.shokai.WakuVideo", category: "AppController")
 
 @MainActor
 private final class RecordingSession {
@@ -87,7 +87,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMe
     menu.addItem(.separator())
     menu.addItem(
       NSMenuItem(
-        title: "VideoClipを終了", action: #selector(NSApplication.terminate(_:)),
+        title: "WakuVideoを終了", action: #selector(NSApplication.terminate(_:)),
         keyEquivalent: "q"))
     menu.delegate = self
 
@@ -113,7 +113,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMe
       button.action = #selector(stopClicked)
     } else {
       button.image = NSImage(
-        systemSymbolName: "record.circle", accessibilityDescription: "VideoClip")
+        systemSymbolName: "record.circle", accessibilityDescription: "WakuVideo")
       statusItem.menu = menu
     }
   }
@@ -215,7 +215,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMe
     indicator.show()
 
     let tempURL = FileManager.default.temporaryDirectory
-      .appendingPathComponent("VideoClip-\(UUID().uuidString)")
+      .appendingPathComponent("WakuVideo-\(UUID().uuidString)")
       .appendingPathExtension("mp4")
     let session = RecordingSession(
       id: sessionID, tempURL: tempURL, saveDirectory: saveDirectory, startedAt: Date(),

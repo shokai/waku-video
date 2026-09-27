@@ -1,5 +1,5 @@
 import AppKit
-import VideoClipCore
+import WakuVideoCore
 
 struct Selection: Sendable {
   var displayID: CGDirectDisplayID

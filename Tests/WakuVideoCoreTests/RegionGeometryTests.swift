@@ -1,7 +1,7 @@
 import CoreGraphics
 import Testing
 
-@testable import VideoClipCore
+@testable import WakuVideoCore
 
 struct RegionGeometryTests {
   @Test func sourceRectOnMainScreen() {

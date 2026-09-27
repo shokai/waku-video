@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-@testable import VideoClipCore
+@testable import WakuVideoCore
 
 struct SaveDirectoryTests {
   let desktop = URL(filePath: "/Users/test/Desktop", directoryHint: .isDirectory)

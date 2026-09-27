@@ -1,7 +1,7 @@
 import CoreGraphics
 import Testing
 
-@testable import VideoClipCore
+@testable import WakuVideoCore
 
 struct ControlPlacementTests {
   let screen = CGRect(x: 0, y: 0, width: 1512, height: 982)

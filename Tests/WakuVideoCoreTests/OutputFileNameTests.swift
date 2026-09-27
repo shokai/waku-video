@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-@testable import VideoClipCore
+@testable import WakuVideoCore
 
 struct OutputFileNameTests {
   @Test func baseNameUsesGivenTimeZone() throws {
