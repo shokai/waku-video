@@ -1,7 +1,7 @@
 import AVFoundation
 import OSLog
 import ScreenCaptureKit
-import VideoClipCore
+import WakuVideoCore
 
 struct RecordingRequest: Sendable {
   var displayID: CGDirectDisplayID
@@ -25,7 +25,7 @@ enum RecorderError: LocalizedError {
   }
 }
 
-private let logger = Logger(subsystem: "org.shokai.VideoClip", category: "ScreenRecorder")
+private let logger = Logger(subsystem: "org.shokai.WakuVideo", category: "ScreenRecorder")
 
 /// SCStreamは非Sendableなので、MainActorから直接触らずにこのclassの中だけで扱う。
 /// startで生成した後、AppControllerがstop()を1回だけ呼ぶ前提で@unchecked Sendableにしている
@@ -95,7 +95,7 @@ final class ScreenRecorder: @unchecked Sendable {
 private final class FrameWriter: NSObject, SCStreamDelegate, SCStreamOutput, @unchecked Sendable {
   private static let readyTimeout: TimeInterval = 0.5
 
-  let queue = DispatchQueue(label: "org.shokai.VideoClip.writer")
+  let queue = DispatchQueue(label: "org.shokai.WakuVideo.writer")
   private let assetWriter: AVAssetWriter
   private let input: AVAssetWriterInput
   private let onInterrupted: @Sendable (any Error) -> Void

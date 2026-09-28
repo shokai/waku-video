@@ -1,7 +1,7 @@
-APP_NAME := VideoClip
-BUNDLE_ID := org.shokai.VideoClip
+APP_NAME := WakuVideo
+BUNDLE_ID := org.shokai.WakuVideo
 CONFIG ?= release
-CODESIGN_IDENTITY ?= VideoClip Local Code Signing
+CODESIGN_IDENTITY ?= WakuVideo Local Code Signing
 APP := build/$(APP_NAME).app
 SWIFT_SOURCES := Package.swift Sources Tests
 # pkill（SIGTERM）だとapplicationShouldTerminateを通らず、録画中の動画を失う。通常のquitを送って終了を待つ

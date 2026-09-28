@@ -5,13 +5,13 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>ja</string>
 	<key>CFBundleExecutable</key>
-	<string>VideoClip</string>
+	<string>WakuVideo</string>
 	<key>CFBundleIdentifier</key>
-	<string>org.shokai.VideoClip</string>
+	<string>org.shokai.WakuVideo</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>VideoClip</string>
+	<string>WakuVideo</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

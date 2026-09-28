@@ -1,7 +1,7 @@
 import CoreGraphics
 import Testing
 
-@testable import VideoClipCore
+@testable import WakuVideoCore
 
 struct OutputSizingTests {
   @Test func keepsSizeWithinLimits() {

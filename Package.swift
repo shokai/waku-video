@@ -2,14 +2,14 @@
 import PackageDescription
 
 let package = Package(
-  name: "VideoClip",
+  name: "WakuVideo",
   platforms: [.macOS(.v15)],
   products: [
-    .executable(name: "VideoClip", targets: ["VideoClip"])
+    .executable(name: "WakuVideo", targets: ["WakuVideo"])
   ],
   targets: [
-    .target(name: "VideoClipCore"),
-    .executableTarget(name: "VideoClip", dependencies: ["VideoClipCore"]),
-    .testTarget(name: "VideoClipCoreTests", dependencies: ["VideoClipCore"]),
+    .target(name: "WakuVideoCore"),
+    .executableTarget(name: "WakuVideo", dependencies: ["WakuVideoCore"]),
+    .testTarget(name: "WakuVideoCoreTests", dependencies: ["WakuVideoCore"]),
   ]
 )
