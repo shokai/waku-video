@@ -335,7 +335,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMe
     }
   }
 
-  /// 録画・トリミングの成否に関わらず、最後に1回だけ呼ぶ
+  /// 録画・トリミングの保存を終えた時に、成否に関わらず1回だけ呼ぶ
   private func endSession(errorMessage: String? = nil, error: (any Error)? = nil) {
     state = .idle
     if let errorMessage {
@@ -368,12 +368,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMe
     panel.message = "トリミングするmp4を選んでください。トリミングすると元のファイルを上書きします"
     panel.prompt = "開く"
     panel.allowedContentTypes = [.mpeg4Movie]
-    // ファイルのURLを渡すと、そのファイルを選択した状態で開く
-    if let lastSavedURL, FileManager.default.fileExists(atPath: lastSavedURL.path) {
-      panel.directoryURL = lastSavedURL
-    } else {
-      panel.directoryURL = saveDirectory
-    }
+    // ファイルのURLを渡すと、そのファイルを選択した状態で開く。ファイルが消えていても親フォルダを開く
+    panel.directoryURL = lastSavedURL ?? saveDirectory
     state = .preparingTrim
     NSApp.activate()
     let response = panel.runModal()
@@ -393,20 +389,20 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMe
 
   private func openTrimWindow(_ url: URL, videoSize: CGSize) {
     let window = TrimWindow(url: url, videoSize: videoSize) { [weak self] outcome in
-      self?.trimFinished(url, outcome)
+      self?.trimWindowFinished(url, outcome)
     }
     state = .trimming(window)
     window.show()
   }
 
-  private func trimFinished(_ url: URL, _ outcome: TrimWindow.Outcome) {
+  private func trimWindowFinished(_ url: URL, _ outcome: TrimWindow.Outcome) {
     switch outcome {
     case .cancelled:
       state = .idle
     case .failed(let error):
       state = .idle
       showError("\(url.lastPathComponent)を開けませんでした", error)
-    case .trimmed(let range):
+    case .selected(let range):
       state = .savingTrim
       Task {
         do {

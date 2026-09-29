@@ -10,7 +10,7 @@ private let logger = Logger(subsystem: "org.shokai.WakuVideo", category: "TrimWi
 final class TrimWindow: NSObject, NSWindowDelegate {
   enum Outcome {
     case cancelled
-    case trimmed(CMTimeRange)
+    case selected(CMTimeRange)
     case failed((any Error)?)
   }
 
@@ -84,7 +84,7 @@ final class TrimWindow: NSObject, NSWindowDelegate {
       finish(.cancelled)
       return
     }
-    finish(.trimmed(range))
+    finish(.selected(range))
   }
 
   // トリミング中に窓を閉じても、beginTrimmingのhandlerは呼ばれない
