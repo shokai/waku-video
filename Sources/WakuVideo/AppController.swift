@@ -1,5 +1,7 @@
 import AppKit
+import CoreMedia
 import OSLog
+import UniformTypeIdentifiers
 import WakuVideoCore
 
 private let logger = Logger(subsystem: "org.shokai.WakuVideo", category: "AppController")
@@ -41,6 +43,10 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMe
     case selecting(SelectionOverlay)
     case recording(RecordingSession)
     case choosingSaveDirectory
+    /// トリミングするファイルを選び、トリミングできる動画か調べている間
+    case preparingTrim
+    case trimming(TrimWindow)
+    case savingTrim
   }
 
   private var state: State = .idle {
@@ -52,6 +58,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMe
   /// 起動引数`-SmokeRecordSeconds 3`で、主画面中央を指定秒数だけ録画して終了する。録画処理を手で操作せずに確かめられるようにするため
   private var smokeRecordSeconds: Double?
   private var isTerminating = false
+  private var lastSavedURL: URL?
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     setUpStatusItem()
@@ -63,12 +70,19 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMe
     }
   }
 
-  /// 録画中や書き出し中に終了すると録画を失うので、保存し終わるまで終了を待たせる
+  /// 録画中や書き出し中に終了すると録画やトリミングの結果を失うので、保存し終わるまで終了を待たせる
   func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-    guard case .recording(let session) = state else { return .terminateNow }
-    isTerminating = true
-    stopRecording(sessionID: session.id)
-    return .terminateLater
+    switch state {
+    case .recording(let session):
+      isTerminating = true
+      stopRecording(sessionID: session.id)
+      return .terminateLater
+    case .savingTrim:
+      isTerminating = true
+      return .terminateLater
+    default:
+      return .terminateNow
+    }
   }
 
   // MARK: - Status item
@@ -78,6 +92,10 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMe
       title: "範囲を選択して録画", action: #selector(startClicked), keyEquivalent: "")
     startItem.target = self
     menu.addItem(startItem)
+    let trimItem = NSMenuItem(
+      title: "動画をトリミング…", action: #selector(trimClicked), keyEquivalent: "")
+    trimItem.target = self
+    menu.addItem(trimItem)
     menu.addItem(.separator())
     menu.addItem(saveDirectoryItem)
     let chooseSaveDirectoryItem = NSMenuItem(
@@ -122,10 +140,11 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMe
     if case .idle = state { beginSelection() }
   }
 
-  // 停止後もmp4を保存し終えるまではrecording状態が続くので、その間は開始も保存先の変更も押せないようにする
+  // 停止後もmp4を保存し終えるまではrecording状態が続くので、その間は開始・トリミング・保存先の変更を押せないようにする
   func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
     guard
       menuItem.action == #selector(startClicked)
+        || menuItem.action == #selector(trimClicked)
         || menuItem.action == #selector(chooseSaveDirectoryClicked)
     else { return true }
     if case .idle = state { return true }
@@ -286,6 +305,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMe
         session.tempURL, into: directory,
         baseName: OutputFileName.baseName(for: session.startedAt))
       logger.info("saved \(destination.path, privacy: .public)")
+      lastSavedURL = destination
       if smokeRecordSeconds == nil {
         NSWorkspace.shared.activateFileViewerSelecting([destination])
       }
@@ -315,7 +335,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMe
     }
   }
 
-  /// 録画の成否に関わらず、最後に1回だけ呼ぶ
+  /// 録画・トリミングの成否に関わらず、最後に1回だけ呼ぶ
   private func endSession(errorMessage: String? = nil, error: (any Error)? = nil) {
     state = .idle
     if let errorMessage {
@@ -338,6 +358,116 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMe
     alert.messageText = message
     alert.informativeText = error?.localizedDescription ?? ""
     alert.runModal()
+  }
+
+  // MARK: - Trimming
+
+  @objc private func trimClicked() {
+    guard case .idle = state else { return }
+    let panel = NSOpenPanel()
+    panel.message = "トリミングするmp4を選んでください。トリミングすると元のファイルを上書きします"
+    panel.prompt = "開く"
+    panel.allowedContentTypes = [.mpeg4Movie]
+    // ファイルのURLを渡すと、そのファイルを選択した状態で開く
+    if let lastSavedURL, FileManager.default.fileExists(atPath: lastSavedURL.path) {
+      panel.directoryURL = lastSavedURL
+    } else {
+      panel.directoryURL = saveDirectory
+    }
+    state = .preparingTrim
+    NSApp.activate()
+    let response = panel.runModal()
+    guard response == .OK, let url = panel.url else {
+      state = .idle
+      return
+    }
+    Task {
+      do {
+        openTrimWindow(url, videoSize: try await VideoTrimmer.trimmableVideoSize(of: url))
+      } catch {
+        state = .idle
+        showError("\(url.lastPathComponent)をトリミングできません", error)
+      }
+    }
+  }
+
+  private func openTrimWindow(_ url: URL, videoSize: CGSize) {
+    let window = TrimWindow(url: url, videoSize: videoSize) { [weak self] outcome in
+      self?.trimFinished(url, outcome)
+    }
+    state = .trimming(window)
+    window.show()
+  }
+
+  private func trimFinished(_ url: URL, _ outcome: TrimWindow.Outcome) {
+    switch outcome {
+    case .cancelled:
+      state = .idle
+    case .failed(let error):
+      state = .idle
+      showError("\(url.lastPathComponent)を開けませんでした", error)
+    case .trimmed(let range):
+      state = .savingTrim
+      Task {
+        do {
+          let result = try await Self.replaceWithTrimmed(url, range: range)
+          logger.info("trimmed \(result.path, privacy: .public)")
+          lastSavedURL = result
+          NSWorkspace.shared.activateFileViewerSelecting([result])
+          endSession()
+        } catch {
+          endSession(errorMessage: "トリミングした動画を保存できませんでした", error: error)
+        }
+      }
+    }
+  }
+
+  /// 書き出しに失敗しても元のファイルが残るよう、別の場所に書き出してから置き換える
+  @concurrent
+  private nonisolated static func replaceWithTrimmed(_ url: URL, range: CMTimeRange) async throws
+    -> URL
+  {
+    let fileManager = FileManager.default
+    let directory: URL
+    do {
+      directory = try temporaryDirectory(replacing: url)
+    } catch {
+      throw DescribedError(errorDescription: error.localizedDescription)
+    }
+    let trimmedURL = directory.appendingPathComponent(url.lastPathComponent)
+    do {
+      try await VideoTrimmer.trim(source: url, range: range, to: trimmedURL)
+    } catch {
+      try? fileManager.removeItem(at: directory)
+      throw DescribedError(errorDescription: error.localizedDescription)
+    }
+    do {
+      let result = try fileManager.replaceItemAt(url, withItemAt: trimmedURL) ?? url
+      try? fileManager.removeItem(at: directory)
+      return result
+    } catch {
+      // 置き換えに失敗すると、元のファイルがこの一時ディレクトリに移っている事があるので消さない
+      var message = "\(error.localizedDescription)\n一時フォルダ: \(directory.path)"
+      // このkeyはFoundationに定数として無い
+      if let original = (error as NSError).userInfo["NSFileOriginalItemLocationKey"] as? URL {
+        message += "\n元のファイル: \(original.path)"
+      }
+      throw DescribedError(errorDescription: message)
+    }
+  }
+
+  /// replaceItemAtは同じボリューム上のファイルでしか置き換えられない。OSの一時ディレクトリを使えなければ、元のファイルの隣に一意な名前のディレクトリを作るようドキュメントが勧めている
+  private nonisolated static func temporaryDirectory(replacing url: URL) throws -> URL {
+    let fileManager = FileManager.default
+    if let directory = try? fileManager.url(
+      for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: url, create: true)
+    {
+      return directory
+    }
+    let directory = url.deletingLastPathComponent()
+      .appendingPathComponent(".WakuVideo-\(UUID().uuidString)", isDirectory: true)
+    try fileManager.createDirectory(at: directory, withIntermediateDirectories: false)
+    return directory
   }
 
   // MARK: - Smoke test
