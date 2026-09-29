@@ -7,11 +7,13 @@ SWIFT_SOURCES := Package.swift Sources Tests
 # pkill（SIGTERM）だとapplicationShouldTerminateを通らず、録画中の動画を失う。通常のquitを送って終了を待つ
 QUIT_APP := osascript -e 'if application id "$(BUNDLE_ID)" is running then tell application id "$(BUNDLE_ID)" to quit' \
 	&& while pgrep -x $(APP_NAME) >/dev/null; do sleep 0.1; done
-# Command Line Toolsだけの環境では、SwiftPMがTesting.frameworkとlib_TestingInteropの場所を渡さない
+# Command Line Toolsだけの環境では、SwiftPMがTesting.framework・lib_TestingInterop・TestingMacrosのpluginの場所を渡さない
 CLT_DEVELOPER := $(wildcard $(shell xcode-select -p)/Library/Developer)
+CLT_TESTING_PLUGINS := $(wildcard $(shell xcode-select -p)/usr/lib/swift/host/plugins/testing)
 TEST_FLAGS := $(if $(CLT_DEVELOPER),-Xswiftc -F -Xswiftc $(CLT_DEVELOPER)/Frameworks \
 	-Xlinker -rpath -Xlinker $(CLT_DEVELOPER)/Frameworks \
-	-Xlinker -rpath -Xlinker $(CLT_DEVELOPER)/usr/lib)
+	-Xlinker -rpath -Xlinker $(CLT_DEVELOPER)/usr/lib) \
+	$(if $(CLT_TESTING_PLUGINS),-Xswiftc -plugin-path -Xswiftc $(CLT_TESTING_PLUGINS))
 
 .PHONY: app run smoke test format lint logs probe reset-tcc check-identity
 
