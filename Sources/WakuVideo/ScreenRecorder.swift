@@ -110,23 +110,7 @@ private final class FrameWriter: NSObject, SCStreamDelegate, SCStreamOutput, @un
     // moovをファイル先頭に置き、ダウンロードし終わる前に再生を始められるようにする
     assetWriter.shouldOptimizeForNetworkUse = true
     input = AVAssetWriterInput(
-      mediaType: .video,
-      outputSettings: [
-        AVVideoCodecKey: AVVideoCodecType.h264,
-        AVVideoWidthKey: size.width,
-        AVVideoHeightKey: size.height,
-        AVVideoColorPropertiesKey: [
-          AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_709_2,
-          AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2,
-          AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2,
-        ],
-        AVVideoCompressionPropertiesKey: [
-          AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel,
-          AVVideoExpectedSourceFrameRateKey: 30,
-          AVVideoMaxKeyFrameIntervalDurationKey: 2,
-          AVVideoAllowFrameReorderingKey: false,
-        ],
-      ])
+      mediaType: .video, outputSettings: VideoEncoding.outputSettings(size: size))
     input.expectsMediaDataInRealTime = true
     assetWriter.add(input)
     self.onInterrupted = onInterrupted
