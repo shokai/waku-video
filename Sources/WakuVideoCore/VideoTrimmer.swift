@@ -29,7 +29,7 @@ public enum VideoTrimmer {
     guard let track = tracks.first(where: { $0.mediaType == .video }) else {
       throw TrimError.noVideoTrack
     }
-    // trimは映像トラックを1本だけ書き出すので、他のトラックは元のファイルを上書きした時に失われる
+    // trimは映像トラックを1本だけ書き出すので、他のトラックはトリミングした動画から抜け落ちる
     guard tracks.count == 1 else { throw TrimError.unsupportedTracks }
     let (naturalSize, transform) = try await track.load(.naturalSize, .preferredTransform)
     let size = naturalSize.applying(transform)

@@ -27,4 +27,33 @@ public enum OutputFileName {
     }
     return candidate
   }
+
+  /// "foo.mp4"は"foo_2.mp4"、"foo_2.mp4"は"foo_3.mp4"のように、末尾の`_数字`を版番号として繰り上げる。既にあれば更に繰り上げる
+  public static func trimmedURL(
+    for source: URL,
+    pathExtension: String = "mp4",
+    exists: (URL) -> Bool
+  ) -> URL {
+    let directory = source.deletingLastPathComponent()
+    var baseName = source.deletingPathExtension().lastPathComponent
+    var index = 2
+    if let separator = baseName.lastIndex(of: "_") {
+      let digits = baseName[baseName.index(after: separator)...]
+      if !digits.isEmpty, digits.allSatisfy({ ("0"..."9").contains($0) }),
+        let number = Int(digits), number < Int.max
+      {
+        baseName = String(baseName[..<separator])
+        index = number + 1
+      }
+    }
+    var candidate = directory.appendingPathComponent("\(baseName)_\(index)")
+      .appendingPathExtension(pathExtension)
+    // Int.maxまで埋まっていたら既にある名前を返す。上書きはせず、移す時にmoveItemが失敗する
+    while index < Int.max, exists(candidate) {
+      index += 1
+      candidate = directory.appendingPathComponent("\(baseName)_\(index)")
+        .appendingPathExtension(pathExtension)
+    }
+    return candidate
+  }
 }

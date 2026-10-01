@@ -25,14 +25,14 @@
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSDesktopFolderUsageDescription</key>
-	<string>録画したmp4をデスクトップに保存します。</string>
+	<string>録画・トリミングしたmp4をデスクトップに保存します。</string>
 	<key>NSDocumentsFolderUsageDescription</key>
-	<string>録画したmp4を保存先のフォルダに保存します。</string>
+	<string>録画したmp4を保存先のフォルダに、トリミングしたmp4を元の動画と同じフォルダに保存します。</string>
 	<key>NSDownloadsFolderUsageDescription</key>
-	<string>録画したmp4を保存先のフォルダに保存します。</string>
+	<string>録画したmp4を保存先のフォルダに、トリミングしたmp4を元の動画と同じフォルダに保存します。</string>
 	<key>NSRemovableVolumesUsageDescription</key>
-	<string>録画したmp4を保存先のフォルダに保存します。</string>
+	<string>録画したmp4を保存先のフォルダに、トリミングしたmp4を元の動画と同じフォルダに保存します。</string>
 	<key>NSNetworkVolumesUsageDescription</key>
-	<string>録画したmp4を保存先のフォルダに保存します。</string>
+	<string>録画したmp4を保存先のフォルダに、トリミングしたmp4を元の動画と同じフォルダに保存します。</string>
 </dict>
 </plist>
