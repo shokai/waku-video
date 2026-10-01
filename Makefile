@@ -1,8 +1,12 @@
 APP_NAME := WakuVideo
 BUNDLE_ID := org.shokai.WakuVideo
+REPO := shokai/waku-video
 CONFIG ?= release
 CODESIGN_IDENTITY ?= WakuVideo Local Code Signing
 APP := build/$(APP_NAME).app
+# zip名にversionを含めず、releases/latest/download/WakuVideo.zipを最新版の固定のURLにする
+ZIP := build/$(APP_NAME).zip
+VERSION := $(shell /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Support/Info.plist)
 SWIFT_SOURCES := Package.swift Sources Tests
 # pkill（SIGTERM）だとapplicationShouldTerminateを通らず、録画中の動画を失う。通常のquitを送って終了を待つ
 QUIT_APP := osascript -e 'if application id "$(BUNDLE_ID)" is running then tell application id "$(BUNDLE_ID)" to quit' \
@@ -15,7 +19,7 @@ TEST_FLAGS := $(if $(CLT_DEVELOPER),-Xswiftc -F -Xswiftc $(CLT_DEVELOPER)/Framew
 	-Xlinker -rpath -Xlinker $(CLT_DEVELOPER)/usr/lib) \
 	$(if $(CLT_TESTING_PLUGINS),-Xswiftc -plugin-path -Xswiftc $(CLT_TESTING_PLUGINS))
 
-.PHONY: app run smoke test format lint logs probe reset-tcc check-identity
+.PHONY: app zip release run smoke test format lint logs probe reset-tcc check-identity check-release
 
 app: check-identity
 	swift build -c $(CONFIG) --product $(APP_NAME)
@@ -25,6 +29,18 @@ app: check-identity
 	cp Support/Info.plist "$(APP)/Contents/Info.plist"
 	codesign --force --sign "$(CODESIGN_IDENTITY)" --identifier $(BUNDLE_ID) --timestamp=none "$(APP)"
 	codesign --verify --strict "$(APP)"
+
+# xattrをzipに入れると、unzip等で展開した時に._*が.appの中に混ざり、署名が壊れる
+zip: app
+	rm -f "$(ZIP)"
+	ditto -c -k --norsrc --keepParent "$(APP)" "$(ZIP)"
+
+# ビルド中にcommitを切り替えたりファイルを編集したりした時に、tagと違う中身を配布しないよう、ビルド後にも検査する
+release: check-release
+	$(MAKE) zip CONFIG=release
+	$(MAKE) check-release
+	gh release create "v$(VERSION)" "$(ZIP)" --repo $(REPO) --target "$$(git rev-parse HEAD)" --title "$(APP_NAME) $(VERSION)" \
+		--notes "インストール方法は[README](https://github.com/$(REPO)#インストール)を参照" --generate-notes
 
 # binaryを直接実行すると、画面収録の許可がTerminalに付いてしまう。openで.appとして起動する
 run: app
@@ -64,4 +80,15 @@ reset-tcc:
 check-identity:
 	@security find-identity -p codesigning | grep -qF "\"$(CODESIGN_IDENTITY)\"" || { \
 		echo "コード署名証明書 '$(CODESIGN_IDENTITY)' がキーチェーンにありません。README.mdの手順で作成してください"; \
+		exit 1; }
+
+check-release:
+	@test -n "$(VERSION)" || { echo "Support/Info.plistからversionを読めません"; exit 1; }
+	@test -z "$$(git status --porcelain --untracked-files=all)" || { echo "commitしていない変更があります"; exit 1; }
+	@git fetch --quiet --tags origin main
+	@test "$$(git rev-parse HEAD)" = "$$(git rev-parse origin/main)" || { \
+		echo "HEADがorigin/mainと一致しません。mainをpullしてから実行してください"; \
+		exit 1; }
+	@! git rev-parse --quiet --verify "refs/tags/v$(VERSION)" >/dev/null || { \
+		echo "tag v$(VERSION) は既にあります。Support/Info.plistのversionを上げてください"; \
 		exit 1; }
