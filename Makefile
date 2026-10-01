@@ -27,7 +27,7 @@ app: check-identity
 	mkdir -p "$(APP)/Contents/MacOS"
 	cp "$$(swift build -c $(CONFIG) --show-bin-path)/$(APP_NAME)" "$(APP)/Contents/MacOS/"
 	cp Support/Info.plist "$(APP)/Contents/Info.plist"
-	codesign --force --sign "$(CODESIGN_IDENTITY)" --identifier $(BUNDLE_ID) --timestamp=none "$(APP)"
+	codesign --force --sign "$(CODESIGN_IDENTITY)" --identifier $(BUNDLE_ID) --options runtime --timestamp=none "$(APP)"
 	codesign --verify --strict "$(APP)"
 
 # xattrをzipに入れると、unzip等で展開した時に._*が.appの中に混ざり、署名が壊れる
@@ -47,7 +47,9 @@ run: app
 	$(QUIT_APP)
 	open "$(APP)"
 
-smoke: app
+# 自動で録画する経路はdebugビルドにしか無い
+smoke:
+	$(MAKE) app CONFIG=debug
 	$(QUIT_APP)
 	rm -rf build/smoke
 	open -W "$(APP)" --args -SmokeRecordSeconds 3 -SaveDirectory "$(CURDIR)/build/smoke"

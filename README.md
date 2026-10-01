@@ -52,7 +52,7 @@ make run        # ビルドして.appを起動
 make test       # ユニットテスト（Swift Testing）
 make format     # swift formatで整形
 make lint       # swift formatでlint
-make smoke      # 主画面の中央を3秒録画して終了し、出力をffprobeで検査
+make smoke      # debugビルドで主画面の中央を3秒録画して終了し、出力をffprobeで検査
 make logs       # アプリのログを表示
 make reset-tcc  # 画面収録・フォルダへのアクセスの許可をリセット
 make zip        # 配布用のzipをbuild/WakuVideo.zipに作る
