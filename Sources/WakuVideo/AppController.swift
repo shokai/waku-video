@@ -55,7 +55,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMe
   private var statusItem: NSStatusItem?
   private let menu = NSMenu()
   private let saveDirectoryItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-  /// 起動引数`-SmokeRecordSeconds 3`で、主画面中央を指定秒数だけ録画して終了する。録画処理を手で操作せずに確かめられるようにするため
+  /// debugビルドでは、起動引数`-SmokeRecordSeconds 3`で、主画面中央を指定秒数だけ録画して終了する。録画処理を手で操作せずに確かめられるようにするため
   private var smokeRecordSeconds: Double?
   private var isTerminating = false
   private var lastSavedURL: URL?
@@ -63,11 +63,14 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMe
   func applicationDidFinishLaunching(_ notification: Notification) {
     setUpStatusItem()
 
-    let smokeSeconds = UserDefaults.standard.double(forKey: "SmokeRecordSeconds")
-    if smokeSeconds > 0 {
-      smokeRecordSeconds = smokeSeconds
-      runSmokeTest()
-    }
+    // 別のプロセスがこの引数でWakuVideoを起動し、WakuVideoの画面収録の許可で録画させられるので、releaseビルドには入れない
+    #if DEBUG
+      let smokeSeconds = UserDefaults.standard.double(forKey: "SmokeRecordSeconds")
+      if smokeSeconds > 0 {
+        smokeRecordSeconds = smokeSeconds
+        runSmokeTest()
+      }
+    #endif
   }
 
   /// 録画中や書き出し中に終了すると録画やトリミングの結果を失うので、保存し終わるまで終了を待たせる
@@ -464,21 +467,23 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMe
 
   // MARK: - Smoke test
 
-  private func runSmokeTest() {
-    guard CGPreflightScreenCaptureAccess(), let screen = NSScreen.screens.first,
-      let displayID = screen.displayID
-    else {
-      logger.error("smoke test: screen capture is not permitted")
-      NSApp.terminate(nil)
-      return
+  #if DEBUG
+    private func runSmokeTest() {
+      guard CGPreflightScreenCaptureAccess(), let screen = NSScreen.screens.first,
+        let displayID = screen.displayID
+      else {
+        logger.error("smoke test: screen capture is not permitted")
+        NSApp.terminate(nil)
+        return
+      }
+      let size = CGSize(width: 800, height: 600)
+      let rect = CGRect(
+        x: screen.frame.midX - size.width / 2, y: screen.frame.midY - size.height / 2,
+        width: size.width, height: size.height)
+      startRecording(
+        Selection(
+          displayID: displayID, screenFrame: screen.frame, scale: screen.backingScaleFactor,
+          globalRect: rect))
     }
-    let size = CGSize(width: 800, height: 600)
-    let rect = CGRect(
-      x: screen.frame.midX - size.width / 2, y: screen.frame.midY - size.height / 2,
-      width: size.width, height: size.height)
-    startRecording(
-      Selection(
-        displayID: displayID, screenFrame: screen.frame, scale: screen.backingScaleFactor,
-        globalRect: rect))
-  }
+  #endif
 }

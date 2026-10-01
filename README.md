@@ -2,6 +2,17 @@
 
 画面の範囲を選択して録画し、ブラウザで再生できるmp4（H.264）で保存するmacOSのメニューバーアプリ。保存後はFinderでファイルを選択した状態で開くので、そのままブラウザにドラッグ&ドロップしてアップロードできる。
 
+## インストール
+
+Apple SiliconのMacと、macOS 15以降が必要。
+
+1. [WakuVideo.zip](https://github.com/shokai/waku-video/releases/latest/download/WakuVideo.zip)をダウンロードして展開する。過去の版は[Releases](https://github.com/shokai/waku-video/releases)にある
+2. `WakuVideo.app`をアプリケーションフォルダに移して開く
+3. Appleの公証を受けていないので、「“WakuVideo”は開いていません」と表示されて止まる。「完了」を押してシステム設定の「プライバシーとセキュリティ」を開き、「お使いのMacを保護するために“WakuVideo”がブロックされました。」の横の「このまま開く」を押す。確認のダイアログでも「このまま開く」を押し、パスワードかTouch IDで認証する。ボタンが無い時は、もう一度WakuVideoを開いてから見る
+4. 初めて録画しようとすると「画面収録の許可が必要です」と表示される。「システム設定を開く」を押し、「画面収録とシステムオーディオ録音」でWakuVideoを許可し、WakuVideoを再起動する
+
+新しい版にする時は、WakuVideoを終了して`WakuVideo.app`を置き換える。開けない時は手順3と同じように開く。画面収録の許可は引き継がれる。
+
 ## 使い方
 
 1. メニューバーのアイコン→「範囲を選択して録画」
@@ -15,7 +26,7 @@
 - 各辺4096px、または4096×2304相当の面積を超える範囲は縮小する。VideoToolboxのH.264エンコーダが各辺4096pxまでしか書き出せない事と、H.264 Level 5.2に収めて再生できる環境を広げるため
 - 音声は録音しない
 
-## 必要なもの
+## ビルドに必要なもの
 
 - macOS 15以降
 - Command Line Tools（`xcode-select --install`）。Xcodeは不要
@@ -41,9 +52,20 @@ make run        # ビルドして.appを起動
 make test       # ユニットテスト（Swift Testing）
 make format     # swift formatで整形
 make lint       # swift formatでlint
-make smoke      # 主画面の中央を3秒録画して終了し、出力をffprobeで検査
+make smoke      # debugビルドで主画面の中央を3秒録画して終了し、出力をffprobeで検査
 make logs       # アプリのログを表示
 make reset-tcc  # 画面収録・フォルダへのアクセスの許可をリセット
+make zip        # 配布用のzipをbuild/WakuVideo.zipに作る
+make release    # zipをGitHub Releasesに載せる（下記）
 ```
 
-初回起動時は、システム設定の「プライバシーとセキュリティ」→「画面とシステムオーディオの録音」でWakuVideoを許可し、アプリを再起動する。
+初回起動時は、システム設定の「プライバシーとセキュリティ」→「画面収録とシステムオーディオ録音」でWakuVideoを許可し、アプリを再起動する。
+
+### リリース
+
+1. `Support/Info.plist`の`CFBundleShortVersionString`と`CFBundleVersion`を上げ、mainにmergeする
+2. mainをpullして`make release`を実行する。releaseビルドしたzipを、`v`+`CFBundleShortVersionString`のtagでGitHub Releasesに載せる。`gh auth login`済みである事
+
+`make release`が途中で失敗したら、GitHubのReleasesに`v<version>`のreleaseとtagが残っていないか確かめる。zipの付いたreleaseが公開されていれば、リリースは済んでいる。作りかけのdraftやtagだけが残っていれば、GitHubのそれらと手元のtag（`git tag -d v<version>`）を消してから再実行する。
+
+利用者の画面収録の許可は署名した証明書に紐付く。同じ名前で作り直した証明書は別物として扱われ、新しい版に置き換えた利用者全員が許可し直す事になる。別のMacでリリースする時は、キーチェーンアクセスで証明書を秘密鍵ごと書き出して移す。
