@@ -18,11 +18,11 @@ public enum OutputFileName {
     pathExtension: String = "mp4",
     exists: (URL) -> Bool
   ) -> URL {
-    var candidate = directory.appendingPathComponent(baseName).appendingPathExtension(pathExtension)
+    var candidate = fileURL(in: directory, name: baseName, pathExtension: pathExtension)
     var index = 2
     while exists(candidate) {
-      candidate = directory.appendingPathComponent("\(baseName) (\(index))")
-        .appendingPathExtension(pathExtension)
+      candidate = fileURL(
+        in: directory, name: "\(baseName) (\(index))", pathExtension: pathExtension)
       index += 1
     }
     return candidate
@@ -46,14 +46,19 @@ public enum OutputFileName {
         index = number + 1
       }
     }
-    var candidate = directory.appendingPathComponent("\(baseName)_\(index)")
-      .appendingPathExtension(pathExtension)
+    var candidate = fileURL(
+      in: directory, name: "\(baseName)_\(index)", pathExtension: pathExtension)
     // Int.maxまで埋まっていたら既にある名前を返す。上書きはせず、移す時にmoveItemが失敗する
     while index < Int.max, exists(candidate) {
       index += 1
-      candidate = directory.appendingPathComponent("\(baseName)_\(index)")
-        .appendingPathExtension(pathExtension)
+      candidate = fileURL(
+        in: directory, name: "\(baseName)_\(index)", pathExtension: pathExtension)
     }
     return candidate
+  }
+
+  /// appendingPathComponent(_:)はfile URLのpathを調べ、同じ名前のフォルダがあると末尾に/を付ける
+  private static func fileURL(in directory: URL, name: String, pathExtension: String) -> URL {
+    directory.appendingPathComponent(name, isDirectory: false).appendingPathExtension(pathExtension)
   }
 }

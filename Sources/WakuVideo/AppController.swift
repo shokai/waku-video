@@ -409,33 +409,55 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMe
     case .selected(let range):
       state = .savingTrim
       Task {
+        let tempURL: URL
         do {
-          let result = try await Self.saveTrimmed(url, range: range)
+          tempURL = try await Self.writeTrimmed(url, range: range)
+        } catch {
+          endSession(errorMessage: "トリミングした動画を書き出せませんでした", error: error)
+          return
+        }
+        do {
+          let result = try await Self.moveTrimmed(tempURL, nextTo: url)
           logger.info("trimmed \(result.path, privacy: .public)")
           lastSavedURL = result
           NSWorkspace.shared.activateFileViewerSelecting([result])
           endSession()
         } catch {
-          endSession(errorMessage: "トリミングした動画を保存できませんでした", error: error)
+          // 範囲の選択と書き出しをやり直さずに済むよう、書き出した動画を消さずに見せる
+          NSWorkspace.shared.activateFileViewerSelecting([tempURL])
+          endSession(
+            errorMessage: "\(url.deletingLastPathComponent().lastPathComponent)に保存できませんでした",
+            error: error)
         }
       }
     }
   }
 
-  /// 書き出し途中や書き出しに失敗した動画が保存先に残らないよう、一時ファイルに書き出してから移す
+  /// 書き出し途中や書き出しに失敗した動画が保存先に残らないよう、一時ファイルに書き出す
   @concurrent
-  private nonisolated static func saveTrimmed(_ url: URL, range: CMTimeRange) async throws -> URL {
-    let fileManager = FileManager.default
-    let trimmedURL = fileManager.temporaryDirectory
+  private nonisolated static func writeTrimmed(_ url: URL, range: CMTimeRange) async throws -> URL {
+    let tempURL = FileManager.default.temporaryDirectory
       .appendingPathComponent("WakuVideo-\(UUID().uuidString)")
       .appendingPathExtension("mp4")
     do {
-      try await VideoTrimmer.trim(source: url, range: range, to: trimmedURL)
-      let destination = OutputFileName.trimmedURL(for: url, exists: itemExists)
-      try fileManager.moveItem(at: trimmedURL, to: destination)
+      try await VideoTrimmer.trim(source: url, range: range, to: tempURL)
+      return tempURL
+    } catch {
+      try? FileManager.default.removeItem(at: tempURL)
+      throw DescribedError(errorDescription: error.localizedDescription)
+    }
+  }
+
+  /// moveRecordingと同じく、別ボリュームへのコピーでMainActorを止めないよう外で行う
+  @concurrent
+  private nonisolated static func moveTrimmed(_ tempURL: URL, nextTo source: URL) async throws
+    -> URL
+  {
+    do {
+      let destination = OutputFileName.trimmedURL(for: source, exists: itemExists)
+      try FileManager.default.moveItem(at: tempURL, to: destination)
       return destination
     } catch {
-      try? fileManager.removeItem(at: trimmedURL)
       throw DescribedError(errorDescription: error.localizedDescription)
     }
   }

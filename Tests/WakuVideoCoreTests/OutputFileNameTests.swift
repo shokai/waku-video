@@ -63,8 +63,31 @@ struct OutputFileNameTests {
 
   @Test func trimmedURLStopsAtIntMax() {
     #expect(
-      trimmedName("a_9223372036854775806.mp4", taken: ["a_9223372036854775807.mp4"])
+      trimmedName(
+        "a_9223372036854775805.mp4",
+        taken: ["a_9223372036854775806.mp4", "a_9223372036854775807.mp4"])
         == "a_9223372036854775807.mp4")
+  }
+
+  @Test func candidatesAreFilesEvenIfFolderWithSameNameExists() throws {
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("OutputFileNameTests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    for name in ["a", "a_2"] {
+      try FileManager.default.createDirectory(
+        at: directory.appendingPathComponent(name, isDirectory: true),
+        withIntermediateDirectories: true)
+    }
+
+    let unique = OutputFileName.uniqueURL(in: directory, baseName: "a") { _ in false }
+    #expect(unique.lastPathComponent == "a.mp4")
+    #expect(!unique.hasDirectoryPath)
+
+    let trimmed = OutputFileName.trimmedURL(for: directory.appendingPathComponent("a.mp4")) {
+      _ in false
+    }
+    #expect(trimmed.lastPathComponent == "a_2.mp4")
+    #expect(!trimmed.hasDirectoryPath)
   }
 
   @Test func trimmedURLAlwaysUsesMP4Extension() {
