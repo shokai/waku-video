@@ -324,15 +324,19 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMe
     let fileManager = FileManager.default
     do {
       try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-      let destination = OutputFileName.uniqueURL(in: directory, baseName: baseName) {
-        fileManager.fileExists(atPath: $0.path)
-      }
+      let destination = OutputFileName.uniqueURL(
+        in: directory, baseName: baseName, exists: itemExists)
       try fileManager.moveItem(at: source, to: destination)
       return destination
     } catch {
       // ファイル操作のエラーはlocalizedDescriptionを作る時にエラーが持つpathの属性を取得するので、MainActorに返す前に文字列にする
       throw DescribedError(errorDescription: error.localizedDescription)
     }
+  }
+
+  /// fileExistsはsymlinkを辿るので、リンク切れのsymlinkを空いている名前と誤判定し、そこへのmoveItemが失敗する。attributesOfItemはsymlinkを辿らない
+  private nonisolated static func itemExists(_ url: URL) -> Bool {
+    (try? FileManager.default.attributesOfItem(atPath: url.path)) != nil
   }
 
   /// 録画・トリミングの保存を終えた時に、成否に関わらず1回だけ呼ぶ
@@ -365,7 +369,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMe
   @objc private func trimClicked() {
     guard case .idle = state else { return }
     let panel = NSOpenPanel()
-    panel.message = "トリミングするmp4を選んでください。トリミングすると元のファイルを上書きします"
+    panel.message = "トリミングするmp4を選んでください。トリミングした動画は同じフォルダに別名で保存します"
     panel.prompt = "開く"
     panel.allowedContentTypes = [.mpeg4Movie]
     // ファイルのURLを渡すと、そのファイルを選択した状態で開く。ファイルが消えていても親フォルダを開く
@@ -405,65 +409,57 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMe
     case .selected(let range):
       state = .savingTrim
       Task {
+        let tempURL: URL
         do {
-          let result = try await Self.replaceWithTrimmed(url, range: range)
+          tempURL = try await Self.writeTrimmed(url, range: range)
+        } catch {
+          endSession(errorMessage: "トリミングした動画を書き出せませんでした", error: error)
+          return
+        }
+        do {
+          let result = try await Self.moveTrimmed(tempURL, nextTo: url)
           logger.info("trimmed \(result.path, privacy: .public)")
           lastSavedURL = result
           NSWorkspace.shared.activateFileViewerSelecting([result])
           endSession()
         } catch {
-          endSession(errorMessage: "トリミングした動画を保存できませんでした", error: error)
+          // 範囲の選択と書き出しをやり直さずに済むよう、書き出した動画を消さずに見せる
+          NSWorkspace.shared.activateFileViewerSelecting([tempURL])
+          endSession(
+            errorMessage: "\(url.deletingLastPathComponent().lastPathComponent)に保存できませんでした",
+            error: error)
         }
       }
     }
   }
 
-  /// 書き出しに失敗しても元のファイルが残るよう、別の場所に書き出してから置き換える
+  /// 書き出し途中や書き出しに失敗した動画が保存先に残らないよう、一時ファイルに書き出す
   @concurrent
-  private nonisolated static func replaceWithTrimmed(_ url: URL, range: CMTimeRange) async throws
-    -> URL
-  {
-    let fileManager = FileManager.default
-    let directory: URL
+  private nonisolated static func writeTrimmed(_ url: URL, range: CMTimeRange) async throws -> URL {
+    let tempURL = FileManager.default.temporaryDirectory
+      .appendingPathComponent("WakuVideo-\(UUID().uuidString)")
+      .appendingPathExtension("mp4")
     do {
-      directory = try temporaryDirectory(replacing: url)
+      try await VideoTrimmer.trim(source: url, range: range, to: tempURL)
+      return tempURL
     } catch {
+      try? FileManager.default.removeItem(at: tempURL)
       throw DescribedError(errorDescription: error.localizedDescription)
-    }
-    let trimmedURL = directory.appendingPathComponent(url.lastPathComponent)
-    do {
-      try await VideoTrimmer.trim(source: url, range: range, to: trimmedURL)
-    } catch {
-      try? fileManager.removeItem(at: directory)
-      throw DescribedError(errorDescription: error.localizedDescription)
-    }
-    do {
-      let result = try fileManager.replaceItemAt(url, withItemAt: trimmedURL) ?? url
-      try? fileManager.removeItem(at: directory)
-      return result
-    } catch {
-      // 置き換えに失敗すると、元のファイルがこの一時ディレクトリに移っている事があるので消さない
-      var message = "\(error.localizedDescription)\n一時フォルダ: \(directory.path)"
-      // このkeyはFoundationに定数として無い
-      if let original = (error as NSError).userInfo["NSFileOriginalItemLocationKey"] as? URL {
-        message += "\n元のファイル: \(original.path)"
-      }
-      throw DescribedError(errorDescription: message)
     }
   }
 
-  /// replaceItemAtは同じボリューム上のファイルでしか置き換えられない。OSの一時ディレクトリを使えなければ、元のファイルの隣に一意な名前のディレクトリを作るようドキュメントが勧めている
-  private nonisolated static func temporaryDirectory(replacing url: URL) throws -> URL {
-    let fileManager = FileManager.default
-    if let directory = try? fileManager.url(
-      for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: url, create: true)
-    {
-      return directory
+  /// moveRecordingと同じく、別ボリュームへのコピーでMainActorを止めないよう外で行う
+  @concurrent
+  private nonisolated static func moveTrimmed(_ tempURL: URL, nextTo source: URL) async throws
+    -> URL
+  {
+    do {
+      let destination = OutputFileName.trimmedURL(for: source, exists: itemExists)
+      try FileManager.default.moveItem(at: tempURL, to: destination)
+      return destination
+    } catch {
+      throw DescribedError(errorDescription: error.localizedDescription)
     }
-    let directory = url.deletingLastPathComponent()
-      .appendingPathComponent(".WakuVideo-\(UUID().uuidString)", isDirectory: true)
-    try fileManager.createDirectory(at: directory, withIntermediateDirectories: false)
-    return directory
   }
 
   // MARK: - Smoke test
