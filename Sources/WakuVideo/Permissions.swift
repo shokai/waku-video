@@ -10,7 +10,7 @@ enum Permissions {
     let alert = NSAlert()
     alert.messageText = "画面収録の許可が必要です"
     alert.informativeText =
-      "システム設定の「プライバシーとセキュリティ」→「画面とシステムオーディオの録音」でWakuVideoを許可し、WakuVideoを再起動してください。"
+      "システム設定の「プライバシーとセキュリティ」→「画面収録とシステムオーディオ録音」でWakuVideoを許可し、WakuVideoを再起動してください。"
     alert.addButton(withTitle: "システム設定を開く")
     alert.addButton(withTitle: "キャンセル")
     guard alert.runModal() == .alertFirstButtonReturn else { return false }
