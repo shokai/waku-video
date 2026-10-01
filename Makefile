@@ -7,6 +7,11 @@ APP := build/$(APP_NAME).app
 # zip名にversionを含めず、releases/latest/download/WakuVideo.zipを最新版の固定のURLにする
 ZIP := build/$(APP_NAME).zip
 VERSION := $(shell /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Support/Info.plist)
+# make releaseを始めた時のcommit。ビルド後もHEADがこれと同じかを確かめ、tagもこれに打つ
+RELEASE_SHA := $(shell git rev-parse HEAD 2>/dev/null)
+# 利用者の画面収録の許可はこの証明書に紐付くので、配布物は必ずこの証明書で署名する
+RELEASE_CERT_LEAF := e1d53b91d0a963517a14d858bc900dc02bc134f6
+ZIP_CHECK_APP := build/zip-check/$(APP_NAME).app
 SWIFT_SOURCES := Package.swift Sources Tests
 # pkill（SIGTERM）だとapplicationShouldTerminateを通らず、録画中の動画を失う。通常のquitを送って終了を待つ
 QUIT_APP := osascript -e 'if application id "$(BUNDLE_ID)" is running then tell application id "$(BUNDLE_ID)" to quit' \
@@ -19,7 +24,7 @@ TEST_FLAGS := $(if $(CLT_DEVELOPER),-Xswiftc -F -Xswiftc $(CLT_DEVELOPER)/Framew
 	-Xlinker -rpath -Xlinker $(CLT_DEVELOPER)/usr/lib) \
 	$(if $(CLT_TESTING_PLUGINS),-Xswiftc -plugin-path -Xswiftc $(CLT_TESTING_PLUGINS))
 
-.PHONY: app zip release run smoke test format lint logs probe reset-tcc check-identity check-release
+.PHONY: app zip release run smoke test format lint logs probe reset-tcc check-identity check-release check-zip
 
 app: check-identity
 	swift build -c $(CONFIG) --product $(APP_NAME)
@@ -35,11 +40,13 @@ zip: app
 	rm -f "$(ZIP)"
 	ditto -c -k --norsrc --keepParent "$(APP)" "$(ZIP)"
 
-# ビルド中にcommitを切り替えたりファイルを編集したりした時に、tagと違う中身を配布しないよう、ビルド後にも検査する
+# ビルド中にcommitを切り替えたりファイルを編集したりした時に、tagと違う中身を配布しないよう、ビルドの前後で同じcommit・versionを検査する
 release: check-release
 	$(MAKE) zip CONFIG=release
-	$(MAKE) check-release
-	gh release create "v$(VERSION)" "$(ZIP)" --repo $(REPO) --target "$$(git rev-parse HEAD)" --title "$(APP_NAME) $(VERSION)" \
+	$(MAKE) check-release VERSION=$(VERSION)
+	@test "$$(git rev-parse HEAD)" = "$(RELEASE_SHA)" || { echo "ビルド中にHEADが変わりました"; exit 1; }
+	$(MAKE) check-zip VERSION=$(VERSION)
+	gh release create "v$(VERSION)" "$(ZIP)" --repo $(REPO) --target "$(RELEASE_SHA)" --title "$(APP_NAME) $(VERSION)" \
 		--notes "インストール方法は[README](https://github.com/$(REPO)#インストール)を参照" --generate-notes
 
 # binaryを直接実行すると、画面収録の許可がTerminalに付いてしまう。openで.appとして起動する
@@ -84,6 +91,7 @@ check-identity:
 		echo "コード署名証明書 '$(CODESIGN_IDENTITY)' がキーチェーンにありません。README.mdの手順で作成してください"; \
 		exit 1; }
 
+# releaseではなくtagの有無を見る。tagだけ残っていると、gh release create --targetはtagを動かさず、そのtagに載せてしまう
 check-release:
 	@test -n "$(VERSION)" || { echo "Support/Info.plistからversionを読めません"; exit 1; }
 	@test -z "$$(git status --porcelain --untracked-files=all)" || { echo "commitしていない変更があります"; exit 1; }
@@ -92,5 +100,15 @@ check-release:
 		echo "HEADがorigin/mainと一致しません。mainをpullしてから実行してください"; \
 		exit 1; }
 	@! git rev-parse --quiet --verify "refs/tags/v$(VERSION)" >/dev/null || { \
-		echo "tag v$(VERSION) は既にあります。Support/Info.plistのversionを上げてください"; \
+		echo "tag v$(VERSION) は既にあります。公開済みならSupport/Info.plistのversionを上げ、失敗したmake releaseの残りならREADMEの「リリース」を見てください"; \
+		exit 1; }
+
+check-zip:
+	rm -rf build/zip-check
+	ditto -x -k "$(ZIP)" build/zip-check
+	codesign --verify --strict -R='identifier "$(BUNDLE_ID)" and certificate leaf = H"$(RELEASE_CERT_LEAF)"' "$(ZIP_CHECK_APP)"
+	@codesign -dv "$(ZIP_CHECK_APP)" 2>&1 | grep -q '(runtime)' || { echo "hardened runtimeが有効ではありません"; exit 1; }
+	@test "$$(lipo -archs "$(ZIP_CHECK_APP)/Contents/MacOS/$(APP_NAME)")" = arm64 || { echo "arm64だけのbinaryではありません"; exit 1; }
+	@test "$$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$(ZIP_CHECK_APP)/Contents/Info.plist")" = "$(VERSION)" || { \
+		echo "zipの中のversionが$(VERSION)ではありません"; \
 		exit 1; }

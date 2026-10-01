@@ -66,6 +66,6 @@ make release    # zipをGitHub Releasesに載せる（下記）
 1. `Support/Info.plist`の`CFBundleShortVersionString`と`CFBundleVersion`を上げ、mainにmergeする
 2. mainをpullして`make release`を実行する。releaseビルドしたzipを、`v`+`CFBundleShortVersionString`のtagでGitHub Releasesに載せる。`gh auth login`済みである事
 
-`make release`が途中で失敗したら、GitHubのReleasesとtagに作りかけの物が残っていないか確かめ、残っていれば消してから再実行する。
+`make release`が途中で失敗したら、GitHubのReleasesに`v<version>`のreleaseとtagが残っていないか確かめる。zipの付いたreleaseが公開されていれば、リリースは済んでいる。作りかけのdraftやtagだけが残っていれば、GitHubのそれらと手元のtag（`git tag -d v<version>`）を消してから再実行する。
 
 利用者の画面収録の許可は署名した証明書に紐付く。同じ名前で作り直した証明書は別物として扱われ、新しい版に置き換えた利用者全員が許可し直す事になる。別のMacでリリースする時は、キーチェーンアクセスで証明書を秘密鍵ごと書き出して移す。
